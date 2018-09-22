@@ -1,0 +1,7 @@
+[package]
+name = "input-rs"
+version = "0.1.0"
+authors = ["Johan Burell <johan.burell@valtech.se>"]
+
+[dependencies]
+evdev = "0.10.1"
