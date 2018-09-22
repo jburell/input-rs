@@ -12,10 +12,12 @@ fn main() {
     let vendor = u16::from_str_radix(args.get(1).unwrap(), 16).unwrap();
     let product = u16::from_str_radix(args.get(2).unwrap(), 16).unwrap();
 
-    let mut input_handler = InputHandler::new(vendor, product).unwrap();
-    input_handler.register_touch_handler(|ev| {
+    let mut input_handler = InputHandler::new(vendor, product, Box::new(|ev| {
         println!("Got an event! {:?}", ev);
-    });
+    })).unwrap();
+    /*input_handler.register_touch_handler(|ev| {
+        println!("Got an event! {:?}", ev);
+    });*/
     input_handler.start_polling_events();
     loop {}
 }
