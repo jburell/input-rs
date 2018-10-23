@@ -1,6 +1,5 @@
 extern crate evdev;
 use evdev::Device;
-use std::sync::mpsc::Sender;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
@@ -16,6 +15,9 @@ pub struct InputHandler{
     is_polling_events: std::sync::atomic::AtomicBool,
     polling_thread: Option<std::thread::JoinHandle<()>>,
 }
+
+const X_RES: f32 = 8640.0;
+const Y_RES: f32 = 15360.0;
 
 impl InputHandler {
     pub fn new(vendor: u16, product: u16, event_handler: Box<FnMut(TouchEvent) + Send>) -> Result<Self, String> {
@@ -40,10 +42,6 @@ impl InputHandler {
         })
     }
 
-    // pub fn register_touch_handler(&mut self, event_handler: Box<FnMut(TouchEvent) + Send>) {
-    //     self.touch_handler = Arc::new(Mutex::new(event_handler));
-    // }
-
     pub fn is_polling_events(&self) -> bool {
         self.is_polling_events.load(Ordering::SeqCst)
     }
@@ -51,23 +49,47 @@ impl InputHandler {
     fn start_polling_thread(&mut self) {
         let dev = self.device.clone();
         let handler = self.touch_handler.clone();
+
+        let mut cached_event = TouchEvent {
+            pos_x: 0f32,
+            pos_y: 0f32,
+        };
+
         self.polling_thread = Some(std::thread::spawn(move || {
             loop {
                 let mut d = dev.lock().expect("Could not lock the device for polling");
+
                 if let Ok(raw_events) = d.events_no_sync() {
                     raw_events.into_iter()
                         .fold(TouchEvent{
                             pos_x: 0f32,
                             pos_y: 0f32,
-                        }, |acc, ev| {
+                        }, |mut acc, ev| {
+                            match ev._type {
+                                3 => {
+                                    match ev.code {
+                                        // 53 == x, writing y to x because screen orientation
+                                        53 => cached_event.pos_y = (ev.value as f32) / Y_RES,
+                                        // 54 == y, negative value because screen orientation, 8640 == max res on y
+                                        54 => cached_event.pos_x = (X_RES - ev.value as f32) / X_RES,
+                                        _ => (),
+                                    }
+                                }
+                                _ => ()
+                            }
+                            
+                            acc = cached_event.clone();
+
                             let mut hndl = handler.lock().expect("Could not lock the handler for polling");
                             let fun = hndl.as_mut();
-                            fun(acc.clone());   
+                            fun(acc.clone());
+
                             println!("Event: {:?}", ev);
+
                             acc
                         });
-                }; 
-            }  
+                };
+            }
         }));
     }
 
@@ -79,9 +101,5 @@ impl InputHandler {
         } else {
             self.is_polling_events.store(is_polling, Ordering::Release);
         }
-        /*chan.send(TouchEvent{
-            pos_x = 0,
-            pos_y = 0,
-        })*/
     }
 }
