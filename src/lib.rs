@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone)]
 pub struct TouchEvent {
-    pos_x: f32,
-    pos_y: f32,
+    pub pos_x: f32,
+    pub pos_y: f32,
 }
 
 pub struct InputHandler{
