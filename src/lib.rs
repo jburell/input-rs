@@ -83,9 +83,6 @@ impl InputHandler {
                             let mut hndl = handler.lock().expect("Could not lock the handler for polling");
                             let fun = hndl.as_mut();
                             fun(acc.clone());
-
-                            println!("Event: {:?}", ev);
-
                             acc
                         });
                 };
