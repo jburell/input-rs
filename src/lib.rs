@@ -1,7 +1,9 @@
 extern crate evdev;
 use evdev::Device;
+
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+use std::str::FromStr;
 
 #[derive(Debug, Clone)]
 pub struct TouchEvent {
@@ -14,13 +16,55 @@ pub struct InputHandler{
     touch_handler: Arc<Mutex<Box<FnMut(TouchEvent) + Send>>>,
     is_polling_events: std::sync::atomic::AtomicBool,
     polling_thread: Option<std::thread::JoinHandle<()>>,
+    screen_rotation: ScreenRotation,
 }
 
 const X_RES: f32 = 8640.0;
 const Y_RES: f32 = 15360.0;
+const ABSOLUTE: u16 = 3;
+const ABS_X:u16 = 53;
+const ABS_Y:u16 = 54;
+
+#[derive(Debug, Clone, Copy)]
+#[allow(non_camel_case_types)]
+pub enum ScreenRotation {
+    Deg_0,
+    Deg_CW90,
+    Deg_CW180,
+    Deg_CCW90,
+}
+
+impl FromStr for ScreenRotation {
+    type Err = String;
+    fn from_str(val: &str) -> Result<Self, Self::Err> {
+        match val {
+            "0" => Ok(ScreenRotation::Deg_0),
+            "CW90" => Ok(ScreenRotation::Deg_CW90),
+            "CW180" => Ok(ScreenRotation::Deg_CW180),
+            "CCW90" => Ok(ScreenRotation::Deg_CCW90),
+            _ => Err(format!("Could not convert {} into screen rotation. Allowed values: 0, CW90, CW180, CCW90", val)),
+        }
+    }
+}
+
+fn formula_x(screen_rotation: ScreenRotation) -> Result<fn(i32) -> f32, String> {
+    match screen_rotation {
+        ScreenRotation::Deg_0 => Ok(|x| {(x as f32) / X_RES}),
+        ScreenRotation::Deg_CW90 => Ok(|x| {(x as f32) / Y_RES}),
+        _ => Err(format!("Unsupported screen rotation {:?}", screen_rotation)),
+    }
+} 
+
+fn formula_y(screen_rotation: ScreenRotation) -> Result<fn(i32) -> f32, String> {
+    match screen_rotation {
+        ScreenRotation::Deg_0 => Ok(|y| {(y as f32) / Y_RES}),
+        ScreenRotation::Deg_CW90 => Ok(|y| (X_RES - y as f32) / X_RES),
+        _ => Err(format!("Unsupported screen rotation {:?}", screen_rotation)),
+    }
+} 
 
 impl InputHandler {
-    pub fn new(vendor: u16, product: u16, event_handler: Box<FnMut(TouchEvent) + Send>) -> Result<Self, String> {
+    pub fn new(vendor: u16, product: u16, event_handler: Box<FnMut(TouchEvent) + Send>, screen_rotation: ScreenRotation) -> Result<Self, String> {
         let mut devices_matching = evdev::enumerate()
             .into_iter()
             .filter(|d| 
@@ -39,6 +83,7 @@ impl InputHandler {
             touch_handler: Arc::new(Mutex::new(event_handler)),
             is_polling_events: std::sync::atomic::AtomicBool::new(false),
             polling_thread: None,
+            screen_rotation: screen_rotation,
         })
     }
 
@@ -55,6 +100,9 @@ impl InputHandler {
             pos_y: 0f32,
         };
 
+        let screen_func_x = formula_x(self.screen_rotation).unwrap();
+        let screen_func_y = formula_y(self.screen_rotation).unwrap();
+        
         self.polling_thread = Some(std::thread::spawn(move || {
             loop {
                 let mut d = dev.lock().expect("Could not lock the device for polling");
@@ -66,13 +114,28 @@ impl InputHandler {
                             pos_y: 0f32,
                         }, |mut acc, ev| {
                             match ev._type {
-                                3 => {
-                                    match ev.code {
-                                        // 53 == x, writing y to x because screen orientation
-                                        53 => cached_event.pos_y = (ev.value as f32) / Y_RES,
-                                        // 54 == y, negative value because screen orientation, 8640 == max res on y
-                                        54 => cached_event.pos_x = (X_RES - ev.value as f32) / X_RES,
-                                        _ => (),
+                                ABSOLUTE => {
+                                    match ScreenRotation::Deg_CW90/*self.screen_rotation*/ {
+                                        // TODO: Clean up this logic (quick hack)
+                                        ScreenRotation::Deg_CW90 => {
+                                            match ev.code {
+                                                // writing y to x because screen orientation
+                                                ABS_X => cached_event.pos_y = screen_func_x(ev.value),
+                                                // negative value because screen orientation, 8640 == max res on y
+                                                ABS_Y => cached_event.pos_x = screen_func_y(ev.value),
+                                                _ => (),
+                                            }
+                                        }
+                                        ScreenRotation::Deg_0 => {
+                                            match ev.code {
+                                                // writing y to x because screen orientation
+                                                ABS_X => cached_event.pos_x = screen_func_x(ev.value),
+                                                // negative value because screen orientation, 8640 == max res on y
+                                                ABS_Y => cached_event.pos_y = screen_func_y(ev.value),
+                                                _ => (),
+                                            }
+                                        }
+                                        _ => (),//println!("{}", format!("Unsupported screen rotation {:?}", &self.screen_rotation)),
                                     }
                                 }
                                 _ => ()
